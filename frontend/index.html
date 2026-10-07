@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CXR MoE-CapsNet Clinical Decision Support</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #0f172a; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        .card { background-color: #1e293b; border: 1px solid #334155; border-radius: 14px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
+        .preview-box { max-height: 380px; width: 100%; object-fit: contain; border-radius: 8px; background: #0b0f19; border: 1px dashed #475569; }
+        .badge-result { font-size: 1.35rem; font-weight: 700; padding: 0.6rem 1.4rem; letter-spacing: 0.5px; }
+        .progress { height: 14px; border-radius: 7px; background-color: #334155; }
+        .progress-bar { font-size: 0.75rem; font-weight: 600; line-height: 14px; }
+    </style>
+</head>
+<body>
+    <div class="container py-5">
+        <header class="text-center mb-5">
+            <h2 class="fw-bold text-info">Chest Radiograph MoE-CapsNet System</h2>
+            <p class="text-secondary mb-0">Deep Mixture of Experts & Capsule Network for Pulmonary Infection Screening</p>
+        </header>
+
+        <div class="row g-4">
+            <!-- Left: Image Upload -->
+            <div class="col-lg-6">
+                <div class="card p-4 h-100">
+                    <h5 class="card-title fw-bold text-light mb-3">Upload Radiograph</h5>
+                    <form id="uploadForm">
+                        <div class="mb-3">
+                            <label for="imageInput" class="form-label text-secondary small">Supported formats: JPG, PNG, BMP, TIFF, WebP</label>
+                            <input class="form-control bg-dark text-light border-secondary" type="file" id="imageInput" accept="image/*" required>
+                        </div>
+                        <div class="text-center my-3">
+                            <img id="imagePreview" class="preview-box d-none" alt="Chest Radiograph Preview">
+                        </div>
+                        <button type="submit" id="submitBtn" class="btn btn-primary w-100 py-2 fw-semibold" disabled>
+                            Run Diagnostic Inference
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Right: Inference Output -->
+            <div class="col-lg-6">
+                <div class="card p-4 h-100">
+                    <h5 class="card-title fw-bold text-light mb-3">Diagnostic Assessment</h5>
+                    
+                    <div id="loadingSpinner" class="text-center my-auto py-5 d-none">
+                        <div class="spinner-border text-info" role="status"></div>
+                        <p class="mt-3 text-secondary small">Evaluating image across MoE Experts & Capsule layers...</p>
+                    </div>
+
+                    <div id="resultContent" class="d-none">
+                        <div class="p-3 mb-4 rounded border border-secondary bg-dark d-flex justify-content-between align-items-center">
+                            <span class="text-secondary fw-semibold">Primary Finding:</span>
+                            <span class="badge bg-primary badge-result" id="predictionBadge">-</span>
+                        </div>
+
+                        <h6 class="fw-bold text-secondary mb-3">Class Probabilities</h6>
+                        <div id="probabilityBars"></div>
+
+                        <h6 class="fw-bold text-secondary mt-4 mb-2">MoE Expert Gating Weights</h6>
+                        <div id="expertGating" class="small text-secondary mb-3"></div>
+
+                        <div class="mt-4 pt-3 border-top border-secondary d-flex justify-content-between text-secondary small">
+                            <span>Status: <strong class="text-success">Inference Complete</strong></span>
+                            <span>Engine: <strong>FastAPI + PyTorch</strong></span>
+                        </div>
+                    </div>
+
+                    <div id="placeholderText" class="text-center text-secondary my-auto py-5">
+                        <svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" class="mb-2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12"/>
+                        </svg>
+                        <p class="mb-0">Select and upload a chest X-ray to inspect analysis results.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const imageInput = document.getElementById('imageInput');
+        const imagePreview = document.getElementById('imagePreview');
+        const submitBtn = document.getElementById('submitBtn');
+        const uploadForm = document.getElementById('uploadForm');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        const resultContent = document.getElementById('resultContent');
+        const placeholderText = document.getElementById('placeholderText');
+        const predictionBadge = document.getElementById('predictionBadge');
+        const probabilityBars = document.getElementById('probabilityBars');
+        const expertGating = document.getElementById('expertGating');
+
+        imageInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(evt) {
+                    imagePreview.src = evt.target.result;
+                    imagePreview.classList.remove('d-none');
+                    submitBtn.disabled = false;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        uploadForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const file = imageInput.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            placeholderText.classList.add('d-none');
+            resultContent.classList.add('d-none');
+            loadingSpinner.classList.remove('d-none');
+            submitBtn.disabled = true;
+
+            try {
+                const res = await fetch('/api/predict', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!res.ok) {
+                    const errDetail = await res.text();
+                    throw new Error(`Server returned HTTP ${res.status}: ${errDetail}`);
+                }
+                const data = await res.json();
+
+                const pred = data.predicted_class || 'Unknown';
+                predictionBadge.innerText = pred;
+
+                predictionBadge.className = 'badge badge-result ';
+                if (pred === 'COVID19') predictionBadge.classList.add('bg-danger');
+                else if (pred === 'NORMAL') predictionBadge.classList.add('bg-success');
+                else if (pred === 'PNEUMONIA') predictionBadge.classList.add('bg-warning', 'text-dark');
+                else if (pred === 'TURBERCULOSIS') predictionBadge.classList.add('bg-info', 'text-dark');
+                else predictionBadge.classList.add('bg-primary');
+
+                // Render class probabilities
+                probabilityBars.innerHTML = '';
+                const classes = data.classes || [];
+                const probs = data.probabilities || [];
+                classes.forEach((cls, idx) => {
+                    const prob = probs[idx] !== undefined ? probs[idx] : 0;
+                    const pct = (prob * 100).toFixed(2);
+                    let barColor = 'bg-info';
+                    if (cls === 'COVID19') barColor = 'bg-danger';
+                    else if (cls === 'NORMAL') barColor = 'bg-success';
+                    else if (cls === 'PNEUMONIA') barColor = 'bg-warning';
+
+                    probabilityBars.innerHTML += `
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between small fw-semibold mb-1">
+                                <span class="text-light">${cls}</span>
+                                <span>${pct}%</span>
+                            </div>
+                            <div class="progress">
+                                <div class="progress-bar ${barColor}" role="progressbar" style="width: ${pct}%"></div>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                // Render gating weights
+                expertGating.innerHTML = '';
+                if (Array.isArray(data.gating_weights)) {
+                    const gatingStr = data.gating_weights
+                        .map((w, i) => `Expert ${i + 1}: ${(w * 100).toFixed(1)}%`)
+                        .join(' | ');
+                    expertGating.innerText = gatingStr;
+                }
+
+                resultContent.classList.remove('d-none');
+            } catch (err) {
+                alert('Diagnostic inference failed: ' + err.message);
+                placeholderText.classList.remove('d-none');
+            } finally {
+                loadingSpinner.classList.add('d-none');
+                submitBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
